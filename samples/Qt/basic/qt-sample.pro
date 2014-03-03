@@ -9,6 +9,7 @@ DEFINES += _ELPP_QT_LOGGING    \
 TARGET = main.cpp.bin
 TEMPLATE = app
 QMAKE_CXXFLAGS += -std=c++11
+QMAKE_CXXFLAGS += -fPIC -g
 SOURCES += main.cpp
 HEADERS += \
            mythread.h \

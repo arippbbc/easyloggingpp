@@ -3590,7 +3590,7 @@ private:
 }  // namespace base
 class LogMessage {
 public:
-    LogMessage(const Level& level, const char* file, unsigned long int line, const char* func,  // NOLINT
+    LogMessage(const Level& level, const std::string& file, unsigned long int line, const std::string& func,  // NOLINT
                           base::VRegistry::VLevel verboseLevel, Logger* logger) :
                   m_level(level), m_file(file), m_line(line), m_func(func),
                   m_verboseLevel(verboseLevel), m_logger(logger), m_message(std::move(logger->stream().str())) {
@@ -3600,17 +3600,17 @@ public:
     }
 
     inline const Level& level(void) const { return m_level; }
-    inline const char* file(void) const { return m_file; }
+    inline const std::string& file(void) const { return m_file; }
     inline unsigned long int line(void) const { return m_line; }  // NOLINT
-    inline const char* func(void) const { return m_func; }
+    inline const std::string& func(void) const { return m_func; }
     inline base::VRegistry::VLevel verboseLevel(void) const { return m_verboseLevel; }
     inline Logger* logger(void) const { return m_logger; }
     inline const base::type::string_t& message(void) const { return m_message; }
 private:
     Level m_level;
-    const char* m_file;
+    std::string m_file;
     unsigned long int m_line;  // NOLINT
-    const char* m_func;
+    std::string m_func;
     base::VRegistry::VLevel m_verboseLevel;
     Logger* m_logger;
     base::type::string_t m_message;
@@ -3838,7 +3838,7 @@ private:
 };
 class AsyncLogMessageQueue {
 public:
-    inline void push(base::AsyncLogMessage&& logMessage) {
+    inline void push(const base::AsyncLogMessage& logMessage) {
         base::threading::lock_guard lock(m_mutex);
         m_queue.push(logMessage);
     }
@@ -3890,7 +3890,7 @@ public:
         if (logFormat->hasFlag(base::FormatFlags::File)) {
             // File
             char* buf = base::utils::Str::clearBuff(buff, base::consts::kSourceFilenameMaxLength);
-            base::utils::File::buildStrippedFilename(logMessage->file(), buff);
+            base::utils::File::buildStrippedFilename(logMessage->file().c_str(), buff);
             buf = base::utils::Str::addToBuff(buff, buf, bufLim);
             base::utils::Str::replaceFirstWithEscape(logLine, base::consts::kLogFileFormatSpecifier, buff);
         }
@@ -3903,7 +3903,7 @@ public:
         if (logFormat->hasFlag(base::FormatFlags::Location)) {
             // Location
             char* buf = base::utils::Str::clearBuff(buff, base::consts::kSourceFilenameMaxLength + base::consts::kSourceLineMaxLength);
-            base::utils::File::buildStrippedFilename(logMessage->file(), buff);
+            base::utils::File::buildStrippedFilename(logMessage->file().c_str(), buff);
             buf = base::utils::Str::addToBuff(buff, buf, bufLim);
             buf = base::utils::Str::addToBuff(":", buf, bufLim);
             buf = base::utils::Str::convertAndAddToBuff(logMessage->line(), base::consts::kSourceLineMaxLength, buf, bufLim, false);
@@ -4028,20 +4028,35 @@ private:
 class AsyncDispatcher {
 public:
     AsyncDispatcher() {
-        m_thread = new std::thread(&AsyncDispatcher::dispatch, this);
+        //m_thread = new std::thread(&AsyncDispatcher::dispatch, this);
+        m_stayAlive = true;
     }
 
     ~AsyncDispatcher() {
-        m_thread->detach();
-        delete m_thread;
+        //m_thread->detach();
+        //delete m_thread;
+        m_stayAlive = false;
     }
-private:
-    std::thread* m_thread;
+//protected:
+    //std::thread* m_thread;
+    bool m_stayAlive;
     
-    void dispatch() {
+    void finish() {
         base::AsyncLogMessage* logMessage = ELPP_QUEUE.next();
-        if (logMessage != nullptr) {
-            LogDispatcher(true, *logMessage, logMessage->dispatchAction()).dispatch(false);
+        while (logMessage != nullptr) {
+            LogDispatcher(true, *logMessage, logMessage->dispatchAction()).dispatch(true);
+            logMessage = ELPP_QUEUE.next();
+        }
+        m_stayAlive = false;
+    }
+
+    void run() {
+        base::AsyncLogMessage* logMessage = ELPP_QUEUE.next();
+        while (logMessage != nullptr || m_stayAlive) {
+            if (logMessage != nullptr) {
+                LogDispatcher(true, *logMessage, logMessage->dispatchAction()).dispatch(true);
+            }
+            logMessage = ELPP_QUEUE.next();
         }
     }
 };
@@ -4168,8 +4183,8 @@ public:
     void triggerDispatch(void) {
         if (m_proceed) {
             if (m_logger->asyncronous()) {
-                ELPP_QUEUE.push(base::AsyncLogMessage(LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
-                          m_logger), m_dispatchAction));
+                ELPP_QUEUE.push(std::move(base::AsyncLogMessage(LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
+                          m_logger), m_dispatchAction)));
             } else {
                 base::LogDispatcher(m_proceed, LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
                           m_logger), m_dispatchAction).dispatch(false);

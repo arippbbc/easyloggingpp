@@ -17,18 +17,19 @@ _INITIALIZE_EASYLOGGINGPP
 
 int main(int argc, char* argv[]) {
     _START_EASYLOGGINGPP(argc, argv);
-
+    el::Logger* d = el::Loggers::getLogger("default");
+    d->makeAsyncronous();
     el::Helpers::removeFlag(el::LoggingFlag::NewLineForContainer);
 
     bool runThreads = true;
-
-    if (runThreads) {
+    MyThread t(0);
+    t.start();
+    /*if (runThreads) {
         for (int i = 1; i <= 100; ++i) {
-            MyThread t(i);
-            t.start();
+            
             t.wait();
         }
-    }
+    }*/
 
      TIMED_BLOCK(t, "whole-block") {
         t.timer.checkpoint();
@@ -89,5 +90,7 @@ int main(int argc, char* argv[]) {
     
     LOG(INFO) << "This is not unicode";
     LOG(INFO) << "This is unicode: " << L"世界，你好";
+    el::base::asyncDispatcher.finish();
+    t.wait();
     return 0;
 }
