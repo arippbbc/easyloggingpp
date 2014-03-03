@@ -3301,6 +3301,14 @@ public:
     inline void setLogBuilder(const api::LogBuilderPtr& logBuilder) {
         m_logBuilder = logBuilder;
     }
+    
+    inline bool asyncronous(void) const {
+        return m_asyncronous;
+    }
+    
+    inline void makeAsyncronous(void) {
+        m_asyncronous = true;
+    }
 
 private:
     std::string m_id;
@@ -3312,6 +3320,7 @@ private:
     std::map<Level, unsigned int> m_unflushedCount;
     base::LogStreamsReferenceMap* m_logStreamsReference;
     api::LogBuilderPtr m_logBuilder;
+    bool m_asyncronous;
 
     friend class el::LogMessage;
     friend class el::Loggers;
@@ -3586,6 +3595,10 @@ public:
                   m_level(level), m_file(file), m_line(line), m_func(func),
                   m_verboseLevel(verboseLevel), m_logger(logger), m_message(std::move(logger->stream().str())) {
     }
+    LogMessage(const LogMessage& logMessage) : m_level(logMessage.m_level), m_file(logMessage.m_file), m_line(logMessage.m_line),
+            m_verboseLevel(logMessage.m_verboseLevel), m_logger(logMessage.m_logger), m_message(std::move(logMessage.m_logger->stream().str())) {
+    }
+
     inline const Level& level(void) const { return m_level; }
     inline const char* file(void) const { return m_file; }
     inline unsigned long int line(void) const { return m_line; }  // NOLINT
@@ -3809,8 +3822,44 @@ private:
         setApplicationArguments(argc, const_cast<char**>(argv));
     }
 };
+class AsyncDispatcher;
 extern _ELPP_EXPORT base::type::StoragePointer elStorage;
+extern base::AsyncDispatcher asyncDispatcher;
+class AsyncLogMessage : public LogMessage {
+public:
+    AsyncLogMessage(const LogMessage& logMessage, base::DispatchAction dispatchAction) :
+        LogMessage(logMessage), m_dispatchAction(dispatchAction) {
+    }
+    base::DispatchAction dispatchAction(void) const {
+        return m_dispatchAction;
+    }
+private:
+    base::DispatchAction m_dispatchAction;
+};
+class AsyncLogMessageQueue {
+public:
+    inline void push(base::AsyncLogMessage&& logMessage) {
+        base::threading::lock_guard lock(m_mutex);
+        m_queue.push(logMessage);
+    }
+
+    inline void pop(void) {
+        base::threading::lock_guard lock(m_mutex);
+        m_queue.pop();
+    }
+
+    inline base::AsyncLogMessage* next(void) {
+        base::threading::lock_guard lock(m_mutex);
+        if (m_queue.empty()) return nullptr;
+        return &m_queue.front();
+    }
+private:
+    base::threading::mutex m_mutex;
+    std::queue<base::AsyncLogMessage> m_queue;
+};
+extern AsyncLogMessageQueue asyncMessageQueue;
 #define ELPP el::base::elStorage
+#define ELPP_QUEUE el::base::asyncMessageQueue
 class DefaultLogBuilder : public api::LogBuilder {
 public:
     base::type::string_t build(const LogMessage* logMessage, bool appendNewLine) const {
@@ -3976,6 +4025,26 @@ private:
 #endif  // defined(_ELPP_SYSLOG)
     }
 };
+class AsyncDispatcher {
+public:
+    AsyncDispatcher() {
+        m_thread = new std::thread(&AsyncDispatcher::dispatch, this);
+    }
+
+    ~AsyncDispatcher() {
+        m_thread->detach();
+        delete m_thread;
+    }
+private:
+    std::thread* m_thread;
+    
+    void dispatch() {
+        base::AsyncLogMessage* logMessage = ELPP_QUEUE.next();
+        if (logMessage != nullptr) {
+            LogDispatcher(true, *logMessage, logMessage->dispatchAction()).dispatch(false);
+        }
+    }
+};
 #if defined(_ELPP_STL_LOGGING)
 /// @brief Workarounds to write some STL logs
 ///
@@ -4098,8 +4167,13 @@ public:
 
     void triggerDispatch(void) {
         if (m_proceed) {
-            base::LogDispatcher(m_proceed, LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
+            if (m_logger->asyncronous()) {
+                ELPP_QUEUE.push(base::AsyncLogMessage(LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
+                          m_logger), m_dispatchAction));
+            } else {
+                base::LogDispatcher(m_proceed, LogMessage(m_level, m_file, m_line, m_func, m_verboseLevel,
                           m_logger), m_dispatchAction).dispatch(false);
+            }
         }
 #if !defined(_ELPP_HANDLE_POST_LOG_DISPATCH)
         // If we don't handle post-log-dispatches, we need to unlock logger
@@ -5774,6 +5848,8 @@ static T* checkNotNull(T* ptr, const char* name, const char* loggerId = _CURRENT
     namespace el {                \
         namespace base {          \
             base::type::StoragePointer elStorage(val);       \
+            base::AsyncLogMessageQueue asyncMessageQueue;                 \
+            base::AsyncDispatcher asyncDispatcher;                        \
         }                                                                        \
         base::debug::CrashHandler elCrashHandler(_ELPP_USE_DEF_CRASH_HANDLER);   \
     }
@@ -5783,6 +5859,8 @@ static T* checkNotNull(T* ptr, const char* name, const char* loggerId = _CURRENT
     namespace el {                \
         namespace base {          \
             base::type::StoragePointer elStorage;       \
+            base::AsyncLogMessageQueue asyncMessageQueue;                 \
+            base::AsyncDispatcher asyncDispatcher;                        \
         }                                                                        \
         base::debug::CrashHandler elCrashHandler(_ELPP_USE_DEF_CRASH_HANDLER);   \
     }
